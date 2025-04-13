@@ -1,0 +1,76 @@
+#version: '3.8'
+
+services:
+  # Database Service (MySQL)
+  db:
+    image: mysql:8.0
+    container_name: todo_mysql_db
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql # Persist database data
+    ports:
+       # Optionally expose MySQL port to host for debugging (e.g., with MySQL Workbench)
+       # Be careful with this in production. Format: HOST:CONTAINER
+      - "3307:3306" # Exposing on host port 3307 to avoid conflict if local MySQL runs on 3306
+    healthcheck:
+       test: ["CMD", "mysqladmin" ,"ping", "-h", "localhost", "-u$$MYSQL_USER", "-p$$MYSQL_PASSWORD"]
+       interval: 10s
+       timeout: 5s
+       retries: 5
+    restart: always
+
+  # Backend Service (Django API)
+  backend:
+    build: ./backend # Path to the backend Dockerfile directory
+    container_name: todo_django_backend
+    volumes:
+      - ./backend:/app # Mount local code into container for development hot-reloading
+    ports:
+      - "8000:8000" # Map host port 8000 to container port 8000
+    environment:
+      # Pass environment variables from the .env file
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
+      - DJANGO_DEBUG=${DJANGO_DEBUG}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_HOST=${MYSQL_HOST} # Service name 'db'
+      - MYSQL_PORT=${MYSQL_PORT}
+    depends_on:
+       db: # Wait for db service to be healthy before starting backend
+         condition: service_healthy
+    # Command to run after container starts (overrides Dockerfile CMD if needed)
+    # The migrate command should ideally be run once after 'up', not every start
+    # command: python manage.py runserver 0.0.0.0:8000
+    restart: on-failure
+
+  # Frontend Service (React App)
+  frontend:
+    build: ./frontend # Path to the frontend Dockerfile directory
+    container_name: todo_react_frontend
+    volumes:
+      - ./frontend:/app        # Mount local code
+      # Prevent node_modules on host from overwriting container node_modules
+      - /app/node_modules
+    ports:
+      - "3000:3000" # Map host port 3000 to container port 3000
+    environment:
+      # Ensures hot-reloading works correctly in some environments inside Docker
+      - CHOKIDAR_USEPOLLING=true
+      # Define the API URL for the React app *inside* the container
+      # This isn't strictly needed if you use localhost:8000 from the browser,
+      # but good practice if React ever needed to call backend server-side.
+      # REACT_APP_API_BASE_URL=http://backend:8000/api
+    depends_on:
+      - backend # Optional: wait for backend before starting frontend
+    # Necessary for Create React App dev server to stay running
+    stdin_open: true
+    tty: true
+    restart: on-failure
+
+volumes:
+  mysql_data: # Define the named volume for database persistence
